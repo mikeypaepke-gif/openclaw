@@ -1,7 +1,7 @@
 import { hasCredentials, usesHostedEndpoint, type RuntimeConfig } from "./config.js";
-import { EvaluationError, evaluationError } from "./errors.js";
+import { EvaluationError, evaluationError, imagesUnsupported } from "./errors.js";
 import { localInput, parseLocalResult } from "./local.js";
-import { parseInput, parseResult } from "./schema.js";
+import { parseInput, parseResult, type ImageAssets } from "./schema.js";
 import { requestEvaluation } from "./transport.js";
 
 /** Evaluate explicit state without ambient credentials, retries, or vendor diagnostics. */
@@ -11,6 +11,7 @@ export async function evaluate(
   signal?: AbortSignal,
   deadlineMonotonicMs?: number,
   isAdmissible?: () => boolean,
+  assets?: ImageAssets,
 ) {
   if (signal?.aborted) {
     throw evaluationError(undefined, true);
@@ -27,13 +28,16 @@ export async function evaluate(
       "unsupported-input",
     );
   }
+  if (assets && !hosted) {
+    throw imagesUnsupported();
+  }
   if (!hasCredentials(config)) {
     throw new Error("TypeSafe API key is missing. Configure a SecretRef in plugin Settings.");
   }
   try {
     const wireInput = hosted ? parsed : localInput(parsed);
     const response = await requestEvaluation({
-      body: { ...wireInput, model },
+      body: { ...wireInput, model, ...(assets ? { assets } : {}) },
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
       providerConfig: config.providerConfig,

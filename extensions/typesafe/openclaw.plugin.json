@@ -148,5 +148,19 @@
         "confidence": "provider-specific"
       }
     }
+  ],
+  "modelCatalog": {
+    "providers": {
+      "typesafe": {
+        "authScope": "plugin",
+        "models": []
+      }
+    }
+  },
+  "providers": [
+    "typesafe"
+  ],
+  "nonSecretAuthMarkers": [
+    "typesafe-plugin"
   ]
 }

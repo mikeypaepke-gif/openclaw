@@ -1,4 +1,4 @@
-import type { DecisionProviderV1 } from "openclaw/plugin-sdk/decisions";
+import type { DecisionProviderV2 } from "openclaw/plugin-sdk/decisions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -14,24 +14,32 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const batch = { state: "synthetic", questions: { q: { type: "boolean" as const } } };
-const context = (signal = new AbortController().signal) => ({
-  model: "kev-latest",
+const batch = {
+  state: { type: "text" as const, text: "synthetic" },
+  questions: { q: { type: "boolean" as const } },
+};
+const context = (signal = new AbortController().signal, model = "kev-latest") => ({
+  model: { provider: "typesafe", id: model, name: model },
+  config: {},
+  auth: { mode: "api-key" as const },
   signal,
   deadlineMonotonicMs: performance.now() + 30_000,
+  isAdmissible: () => true,
 });
+const isReady = (provider: DecisionProviderV2) =>
+  provider.provider?.resolveSyntheticAuth?.({ provider: "typesafe" }) !== undefined;
 
 async function register() {
   const { default: plugin } = await import("../index.js");
   let config: { baseUrl?: string } = { baseUrl: "http://127.0.0.1:1234" };
-  let provider: DecisionProviderV1 | undefined;
+  let provider: DecisionProviderV2 | undefined;
   plugin.register({
     runtime: {
       config: {
         current: () => ({ plugins: { entries: { typesafe: { config } } } }),
       },
     },
-    registerDecisionProvider: (registered: DecisionProviderV1) => {
+    registerDecisionProvider: (registered: DecisionProviderV2) => {
       provider = registered;
     },
   } as unknown as OpenClawPluginApi);
@@ -109,13 +117,13 @@ it("shares a pending evaluator initialization with a later first caller", async 
   });
   vi.doMock("./client.js", initialize);
   const { provider } = await register();
-  expect(provider.isReady?.()).toBe(true);
+  expect(isReady(provider)).toBe(true);
   expect(initialize).not.toHaveBeenCalled();
   const first = provider.evaluate(batch, context());
-  let second: ReturnType<DecisionProviderV1["evaluate"]> | undefined;
+  let second: ReturnType<DecisionProviderV2["evaluate"]> | undefined;
   try {
     await started.promise;
-    second = provider.evaluate(batch, { ...context(), model: "jev-latest" });
+    second = provider.evaluate(batch, context(undefined, "jev-latest"));
     expect(evaluate).not.toHaveBeenCalled();
   } finally {
     release.resolve();
@@ -138,7 +146,7 @@ it("rejects evaluator initialization errors instead of reporting provider unavai
   });
   vi.doMock("./client.js", initialize);
   const { provider } = await register();
-  expect(provider.isReady?.()).toBe(true);
+  expect(isReady(provider)).toBe(true);
   await expect(provider.evaluate(batch, context())).rejects.toThrow();
   await expect(provider.evaluate(batch, context())).rejects.toThrow();
   expect(initialize).toHaveBeenCalledOnce();

@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
 import type { Server } from "node:net";
+import {
+  decisionBatchV1ToV2,
+  decisionResultV2ToV1,
+  type DecisionBatch,
+  type DecisionProviderContextV2,
+  type DecisionProviderV1,
+  type ProviderDecisionOutcome,
+} from "openclaw/plugin-sdk/decisions";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { vi } from "vitest";
 import plugin from "../index.js";
@@ -52,7 +60,7 @@ export const closeServer = (server: Server) =>
     server.close((error) => (error ? reject(error) : resolve()));
   });
 
-export function registeredDecisionProvider(
+export function registeredPreparedDecisionProvider(
   current: () => ReturnType<OpenClawPluginApi["runtime"]["config"]["current"]>,
 ) {
   const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
@@ -62,8 +70,53 @@ export function registeredDecisionProvider(
   } as unknown as OpenClawPluginApi);
   const provider = registerDecisionProvider.mock.calls[0]?.[0];
   assert(provider);
-  if (provider.contractVersion !== 1) {
+  if (provider.contractVersion !== 2 || provider.provider?.authScope !== "plugin") {
     throw new Error("TypeSafe fixture registered an unexpected decision contract");
   }
   return provider;
+}
+
+/** Prepared private context, as the host hands it to the selected V2 executor. */
+export const preparedContext = (model: string, budget = 1000) =>
+  ({
+    model: { provider: "typesafe", id: model, name: model },
+    config: {},
+    auth: { mode: "api-key", apiKey: "typesafe-plugin" },
+    signal: new AbortController().signal,
+    deadlineMonotonicMs: performance.now() + budget,
+    isAdmissible: () => true,
+  }) satisfies DecisionProviderContextV2;
+
+/** Drive the registered V2 provider exactly as the host serves a V1 caller. */
+export function registeredDecisionProvider(
+  current: () => ReturnType<OpenClawPluginApi["runtime"]["config"]["current"]>,
+) {
+  const provider = registeredPreparedDecisionProvider(current);
+  return {
+    isReady: () =>
+      provider.provider?.resolveSyntheticAuth?.({ provider: "typesafe" }) !== undefined,
+    async evaluate(
+      batch: DecisionBatch,
+      context: Parameters<DecisionProviderV1["evaluate"]>[1],
+    ): Promise<ProviderDecisionOutcome> {
+      const v2 = decisionBatchV1ToV2(batch);
+      if (!v2) {
+        return { status: "unavailable", reason: "unsupported-input" };
+      }
+      const outcome = await provider.evaluate(v2, {
+        ...preparedContext(context.model),
+        ...(context.agentId ? { agentId: context.agentId } : {}),
+        signal: context.signal,
+        deadlineMonotonicMs: context.deadlineMonotonicMs,
+        isAdmissible: context.isAdmissible ?? (() => true),
+      });
+      if (outcome.status !== "ok") {
+        return outcome;
+      }
+      const result = decisionResultV2ToV1(v2, outcome.result);
+      return result
+        ? { status: "ok", result }
+        : { status: "unavailable", reason: "unsupported-input" };
+    },
+  };
 }

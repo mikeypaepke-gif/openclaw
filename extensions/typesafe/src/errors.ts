@@ -11,6 +11,14 @@ export class EvaluationError extends Error {
   }
 }
 
+/** Images go only to hosted Jev; refuse them before any other endpoint is contacted. */
+export function imagesUnsupported(): EvaluationError {
+  return new EvaluationError(
+    "TypeSafe images require hosted Jev; local (Kev) and custom System One endpoints do not accept image input.",
+    "unsupported-input",
+  );
+}
+
 /** Only fixed plugin diagnostics cross the provider boundary; raw causes stay discarded. */
 export function evaluationError(error: unknown, aborted: boolean): EvaluationError {
   if (aborted) {

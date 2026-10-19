@@ -7,7 +7,9 @@ import {
   choiceAnswer,
   mockFetch,
   mockJsonResponse as mockResponse,
+  preparedContext,
   registeredDecisionProvider,
+  registeredPreparedDecisionProvider,
   scoreAnswer,
 } from "./transport.test-support.js";
 
@@ -311,8 +313,14 @@ it.each(["inherited array serializer", "hidden serializer", "getter", "hidden ar
       );
     }
     const fetch = mockResponse({});
+    const provider = registeredPreparedDecisionProvider(() => ({
+      plugins: { entries: { typesafe: { config: {} } } },
+    }));
     await expect(
-      registeredProvider().evaluate({ state, questions: { q: { type: "boolean" } } }, context()),
+      provider.evaluate(
+        { state: { type: "json", value: state }, questions: { q: { type: "boolean" } } },
+        preparedContext("jev-agent-selected"),
+      ),
     ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
     expect(hook).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();

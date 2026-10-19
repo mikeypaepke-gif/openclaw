@@ -19,10 +19,16 @@ import {
   HOSTED_ORIGIN,
   type ModelProviderConfig,
 } from "./config.js";
-import { EvaluationError } from "./errors.js";
-import { MAX_JSON_BYTES, type EvaluationInput } from "./schema.js";
+import { EvaluationError, imagesUnsupported } from "./errors.js";
+import {
+  MAX_IMAGE_REQUEST_BYTES,
+  MAX_JSON_BYTES,
+  type EvaluationInput,
+  type ImageAssets,
+} from "./schema.js";
 
 const API_BASE_URL = `${HOSTED_ORIGIN}/v1`;
+const IMAGE_OPT_IN_HEADER = "TypeSafe-Danger-Zone-Images";
 
 function httpError(response: Response): EvaluationError {
   if (response.status === 401 || response.status === 403) {
@@ -95,7 +101,7 @@ async function readBody(response: Response, signal?: AbortSignal): Promise<Buffe
 }
 
 export async function requestEvaluation(params: {
-  body: EvaluationInput & { model: string };
+  body: EvaluationInput & { model: string; assets?: ImageAssets };
   apiKey?: string;
   baseUrl?: string;
   providerConfig?: ModelProviderConfig;
@@ -108,6 +114,10 @@ export async function requestEvaluation(params: {
     ? providerBaseUrl(params.providerConfig.baseUrl)
     : localBaseUrl(params.baseUrl);
   const apiBaseUrl = params.providerConfig ? baseUrl : baseUrl ? `${baseUrl}/v1` : API_BASE_URL;
+  const hasImages = Object.keys(params.body.assets ?? {}).length > 0;
+  if (hasImages && new URL(apiBaseUrl ?? API_BASE_URL).origin !== HOSTED_ORIGIN) {
+    throw imagesUnsupported();
+  }
   let resolved: ReturnType<typeof resolveProviderHttpRequestConfigWithOriginTrust>;
   let configuredRequest: ReturnType<typeof sanitizeConfiguredModelProviderRequest>;
   try {
@@ -147,6 +157,11 @@ export async function requestEvaluation(params: {
       "credentials-unavailable",
     );
   }
+  // The experimental image opt-in is adapter-owned; configured headers cannot change it.
+  resolved.headers.delete(IMAGE_OPT_IN_HEADER);
+  if (hasImages) {
+    resolved.headers.set(IMAGE_OPT_IN_HEADER, "true");
+  }
   const reflectsCredential = createProviderCredentialMatcher({
     headers: resolved.headers,
     request: configuredRequest,
@@ -164,7 +179,7 @@ export async function requestEvaluation(params: {
       })
     : undefined;
   const body = JSON.stringify(params.body);
-  if (Buffer.byteLength(body) > MAX_JSON_BYTES) {
+  if (Buffer.byteLength(body) > (hasImages ? MAX_IMAGE_REQUEST_BYTES : MAX_JSON_BYTES)) {
     throw new EvaluationError("TypeSafe request exceeds its limit.", "unsupported-input");
   }
   const timeoutMs =

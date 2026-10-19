@@ -6,6 +6,16 @@ import { EvaluationError } from "./errors.js";
 
 // Transport/CPU guards; each server enforces its model's context budget.
 export const MAX_JSON_BYTES = 4 * 1024 * 1024;
+// TypeSafe's documented body limit for requests carrying images, including base64 text.
+export const MAX_IMAGE_REQUEST_BYTES = 32 * 1024 * 1024;
+
+/** TypeSafe's referenced image map; the adapter builds it only from tagged image state. */
+export type ImageAssets = Readonly<
+  Record<
+    string,
+    { readonly type: "image"; readonly format: "png" | "jpg"; readonly data_base64: string }
+  >
+>;
 const MAX_JSON_NODES = 262144;
 const MAX_JSON_DEPTH = 64;
 const MAX_CHOICE_OPTIONS = 255;
