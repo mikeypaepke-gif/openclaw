@@ -39,6 +39,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { executePreparedDecision } from "./decision-inference.js";
 import * as modelAuth from "./model-auth-provider.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
@@ -49,6 +50,7 @@ type Trace = {
   context?: DecisionProviderContextV2;
   onDispatch?: () => void;
   prepare?: () => Promise<void>;
+  augment?: (entries: ModelCatalogEntry[]) => ModelCatalogEntry[] | undefined;
   beforeRequest?: (context: DecisionProviderContextV2) => void;
   fetch?: typeof fetch;
   work?: Promise<void>;
@@ -82,6 +84,8 @@ afterEach(async () => {
 
 it.each([
   "plugin",
+  "plugin-unlisted",
+  "plugin-unlisted-refused",
   "plugin-route-fresh",
   "plugin-route-missing",
   "plugin-route-multiple",
@@ -99,6 +103,7 @@ it.each([
   "runs the retained decision SDK through real preparation without primary fallback or fabricated chat fields (%s)",
   async (authScope) => {
     const pluginAuth = authScope.startsWith("plugin");
+    const unlisted = authScope.startsWith("plugin-unlisted");
     const deadlinePhase =
       authScope === "plugin-preparation-deadline"
         ? "preparation"
@@ -127,33 +132,35 @@ it.each([
               ...(pluginAuth
                 ? {}
                 : { api: "openai-completions", baseUrl: "https://catalog.fixture.invalid/v1" }),
-              models: [
-                {
-                  id: "native",
-                  name: "Native fixture",
-                  ...(authScope === "exchange"
-                    ? {
-                        api: "openai-completions",
-                        baseUrl: "https://catalog.fixture.invalid/v1",
-                        contextWindow: 4096,
-                        maxTokens: 256,
-                      }
-                    : {}),
-                  inference: {
-                    chat: authScope === "exchange",
-                    decision: {
-                      protocol: "fixture",
-                      billing: {
-                        unit: "tokens",
-                        source: "provider-catalog",
-                        usdPerMillion: { input: 2, output: 0 },
+              models: unlisted
+                ? []
+                : [
+                    {
+                      id: "native",
+                      name: "Native fixture",
+                      ...(authScope === "exchange"
+                        ? {
+                            api: "openai-completions",
+                            baseUrl: "https://catalog.fixture.invalid/v1",
+                            contextWindow: 4096,
+                            maxTokens: 256,
+                          }
+                        : {}),
+                      inference: {
+                        chat: authScope === "exchange",
+                        decision: {
+                          protocol: "fixture",
+                          billing: {
+                            unit: "tokens",
+                            source: "provider-catalog",
+                            usdPerMillion: { input: 2, output: 0 },
+                          },
+                          input: ["text"],
+                          questions: { boolean: { probabilities: "none", abstention: true } },
+                        },
                       },
-                      input: ["text"],
-                      questions: { boolean: { probabilities: "none", abstention: true } },
                     },
-                  },
-                },
-              ],
+                  ],
             },
           },
         },
@@ -168,7 +175,7 @@ it.each([
         'provider: { label: "Synthetic", auth: [], authScope: ' +
           JSON.stringify(pluginAuth ? "plugin" : "agent") +
           ", " +
-          "async augmentModelCatalog({ entries }) { await trace.prepare?.(); return entries; }," +
+          "async augmentModelCatalog({ entries }) { await trace.prepare?.(); return trace.augment ? trace.augment(entries) : entries; }," +
           (authScope === "profile" || authScope === "missing"
             ? ""
             : 'resolveSyntheticAuth() { return {apiKey: "synthetic-prepared-token", mode: "api-key", source: "synthetic fixture"}; },') +
@@ -188,6 +195,20 @@ it.each([
       authenticated: false,
       usage: { inputTokens: 100, costUsd: 0 },
     };
+    if (authScope === "plugin-unlisted") {
+      trace.augment = (entries) =>
+        entries.map((entry) => ({
+          ...entry,
+          inference: {
+            chat: false,
+            decision: {
+              protocol: "fixture",
+              input: ["text"],
+              questions: { boolean: { probabilities: "none", abstention: true } },
+            },
+          },
+        }));
+    }
     Reflect.set(globalThis, traceKey, trace);
     if (authScope === "profile" || deadlinePhase) {
       profileState = await createOpenClawTestState({
@@ -473,6 +494,36 @@ it.each([
           },
         );
       const outcome = await evaluateFixture();
+      if (authScope === "plugin-unlisted-refused") {
+        // An identity-only seed is not a provider declaration. Nor may another
+        // provider/model row authorize the selected route.
+        expect(outcome).toEqual({ status: "unavailable", reason: "unsupported-input" });
+        for (const returned of [
+          undefined,
+          { provider: id, id: "other", name: "Other" },
+          { provider: "other", id: "native", name: "Other" },
+        ]) {
+          trace.augment = () =>
+            returned
+              ? [
+                  {
+                    ...returned,
+                    inference: { chat: false, decision: { protocol: "fixture", input: ["text"] } },
+                  },
+                ]
+              : undefined;
+          expect(await evaluateFixture()).toEqual({
+            status: "unavailable",
+            reason: "unsupported-input",
+          });
+        }
+        expect(trace.calls).toBe(0);
+        expect(
+          credentialPreparation.mock.calls.filter(([params]) => params.capability === "decision"),
+        ).toEqual([]);
+        expect(usageEvents).toEqual([]);
+        return;
+      }
       if (authScope.startsWith("plugin-route-") && authScope !== "plugin-route-fresh") {
         expect(outcome).toEqual({ status: "unavailable", reason: "unsupported-input" });
         expect(trace.calls).toBe(0);

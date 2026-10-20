@@ -275,12 +275,10 @@ entry, existing hosted and plugin loopback configuration behaves as before.
 
 Use the server's routing model ID in `decisionModel`. The selected model portion
 is transmitted unchanged; routers such as Llama swap may reject `kev-latest` if
-no route has that name. Decisions route through the shared model catalog, so the
-host only dispatches catalog IDs. The presets `jev-latest`, `jev-1.13.0`, and
-`kev-latest` are always present. List any other server route ID under `models`,
-for example `models: [{ id: "my-route", name: "My route" }]`; decisions treat
-each listed route as a text-only System One model. An unlisted custom ID returns `unsupported-input` before
-any request. `models: []` is enough when you select a preset. This endpoint
+no route has that name. `models: []` supplies the ordinary custom-provider config
+shape without registering conversational models. The native decision role can
+use custom IDs not among the plugin's declared picker presets; the adapter declares
+these selected routes as text-only System One models. This endpoint
 support does not relax System One response validation or guarantee compatibility
 with additional response fields returned by every server implementation.
 
@@ -355,7 +353,7 @@ remove, or change it. Boolean, Choice, and Score questions are supported; Box, S
 and Tags questions return `unsupported-input`. Questions and rubrics stay text or
 JSON. Results have the same shape as text decisions.
 
-Limits and refusals, all before any request:
+Limits and refusals:
 
 - PNG and JPEG data URIs only. WebP and other formats return `unsupported-input`;
   OpenClaw does not convert, resize, or fetch images.
@@ -364,7 +362,7 @@ Limits and refusals, all before any request:
   side, 16 MiB per image, and a 32 MiB request body. Images outside TypeSafe's limits
   are rejected by the API as `unsupported-input`, not resized.
 - Hosted `jev-latest` and `jev-1.13.0` only. Kev through a loopback `baseUrl`, custom
-  `models.providers.typesafe` endpoints, and listed custom route IDs return
+  `models.providers.typesafe` endpoints, and custom route IDs return
   `unsupported-input` for image state.
 
 TypeSafe labels images and Box questions "dreamer-ready": the request format,
