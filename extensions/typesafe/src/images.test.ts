@@ -8,7 +8,7 @@ import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { evaluate } from "./client.js";
-import type { ModelProviderConfig } from "./config.js";
+import type { RuntimeConfig } from "./config.js";
 import {
   choiceAnswer,
   decisionContext,
@@ -18,6 +18,8 @@ import {
   registeredPreparedDecisionProvider,
   scoreAnswer,
 } from "./transport.test-support.js";
+
+type ModelProviderConfig = NonNullable<RuntimeConfig["providerConfig"]>;
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/secret-input-runtime")>()),
