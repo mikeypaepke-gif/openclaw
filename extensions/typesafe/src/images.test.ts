@@ -9,7 +9,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { evaluate } from "./client.js";
 import type { ModelProviderConfig } from "./config.js";
-import { requestEvaluation } from "./transport.js";
 import {
   choiceAnswer,
   decisionContext,
@@ -376,7 +375,7 @@ describe("tagged image state", () => {
     expect(lookup).not.toHaveBeenCalled();
   });
 
-  it("explains the local/custom refusal at the client and transport", async () => {
+  it("explains the local/custom refusal at the client entrypoint", async () => {
     const fetch = mockJsonResponse(response);
     const assets = { ref: { type: "image", format: "png", data_base64: png } } as const;
     const input = {
@@ -398,11 +397,18 @@ describe("tagged image state", () => {
       message: expect.stringContaining("require hosted Jev"),
     });
     await expect(
-      requestEvaluation({
-        body: { ...input, model: "jev-latest", assets },
-        providerConfig: { baseUrl: "https://decision.example.com/v1", models: [] },
-        timeoutMs: 1000,
-      }),
+      evaluate(
+        { ...input, model: "jev-latest" },
+        {
+          apiKey: "synthetic-key",
+          providerConfig: { baseUrl: "https://decision.example.com/v1", models: [] },
+          timeoutMs: 1000,
+        },
+        undefined,
+        undefined,
+        undefined,
+        assets,
+      ),
     ).rejects.toMatchObject({ reason: "unsupported-input" });
     expect(fetch).not.toHaveBeenCalled();
   });
