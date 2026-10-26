@@ -317,8 +317,7 @@ Use the server's routing model ID in `decisionModel`. The selected model portion
 is transmitted unchanged; routers such as Llama swap may reject `kev-latest` if
 no route has that name. `models: []` supplies the ordinary custom-provider config
 shape without registering conversational models. The native decision role can
-use custom IDs not among the plugin's declared picker presets; the adapter declares
-these selected routes as text-only System One models. This endpoint
+use custom IDs not among the plugin's declared picker presets. This endpoint
 support does not relax System One response validation or guarantee compatibility
 with additional response fields returned by every server implementation.
 
@@ -326,16 +325,8 @@ with additional response fields returned by every server implementation.
 
 Consumers call the provider-neutral
 [decision runtime](/plugins/sdk-overview/capabilities#decision-models-contract-version-1).
-The host supplies the model selected for the owning agent. The adapter registers a
-[version 2 decision provider](/plugins/sdk-overview/capabilities#prepared-decision-execution-contract-version-2)
-that shares the model catalog and keeps its credentials plugin-owned: requests read
-the same prepared SecretRef, loopback `baseUrl`, or `models.providers.typesafe`
-route as before, and nothing is read from agent auth profiles. Version 1 callers
-are served through the host's lossless conversion, with an unchanged wire request.
-Because version 2 credentials are checked per request, `plugins.inspect` no longer
-reports `credentialReady` for TypeSafe; missing credentials still return
-`credentials-unavailable` before any request. The adapter translates the
-supported question types:
+The host supplies the model selected for the owning agent. The adapter translates
+the supported question types:
 
 | OpenClaw | TypeSafe | Result                                                       |
 | -------- | -------- | ------------------------------------------------------------ |
@@ -364,54 +355,46 @@ provider configuration or the existing loopback `baseUrl` selects a self-hosted 
 redirects, and do not retry automatically. Consumers decide what to do with
 unavailable decisions; caller cancellation must not start fallback work.
 
-## Image state (experimental)
+## Experimental image decisions
 
-Plugins can ask hosted Jev about one image with
-`api.runtime.decisions.evaluateV2` and tagged image state:
+Hosted Jev accepts one tagged PNG or JPEG image with optional accompanying text
+through Decision V2. The Jev, Jev Preview, and Jev 1.13.0 catalog rows advertise
+image input. Local Kev, custom endpoints, and other model IDs remain text-only.
 
-```ts
-const outcome = await api.runtime.decisions.evaluateV2(
-  {
-    state: { type: "image", dataUri: "data:image/png;base64,...", text: "Front door camera" },
-    questions: {
-      person: { type: "boolean", instructions: "Is a person visible in the image?" },
-    },
+For example, pass this shape to `decision_evaluate`, replacing the placeholder
+with the base64 bytes of a real PNG:
+
+```json
+{
+  "contractVersion": 2,
+  "state": {
+    "type": "image",
+    "dataUri": "data:image/png;base64,<PNG_BYTES>",
+    "text": "Inspect the delivery area."
   },
-  { agentId, purpose: "example-plugin.door-check", rubricVersion: "1", timeoutMs: 15000, signal },
-);
-if (outcome.status === "ok") {
-  const answer = outcome.result.answers.person;
-  // answer.type === "boolean"; answer.probabilityTrue is Jev's P(true).
+  "questions": {
+    "package": { "type": "boolean", "instructions": "Is a package visible?" }
+  }
 }
 ```
 
-The adapter sends the image once in TypeSafe's `assets` map under a fresh random
-reference, places that reference in `state` after the optional caption, and adds
-the `TypeSafe-Danger-Zone-Images: true` header to that request only. Text requests
-never carry the header, and configured `headers` or `request.headers` cannot add,
-remove, or change it. Boolean, Choice, and Score questions are supported; Box, Sort,
-and Tags questions return `unsupported-input`. Questions and rubrics stay text or
-JSON. Results have the same shape as text decisions.
+The adapter sends the image once in TypeSafe's referenced `assets` map and enables
+`TypeSafe-Danger-Zone-Images: true` only for image requests. Text-only requests do
+not send this header, even when configured manually. Prepared credentials,
+headers, deadlines, cancellation, and usage accounting follow the same transport
+as text decisions; there is no separate image credential or endpoint.
 
-Limits and refusals:
+OpenClaw limits the decoded image to **4 MiB**. PNG and JPEG must be still images;
+WebP, remote image URLs, Box/Tags questions, and images embedded in instructions
+or criteria are not supported by this adapter. TypeSafe additionally requires
+**280–1568 pixels on each side** and rejects invalid or animated images rather
+than resizing them. Ordinary text/JSON guards remain unchanged; the serialized
+image request uses TypeSafe's 32 MiB body limit to allow base64 expansion.
 
-- PNG and JPEG data URIs only. WebP and other formats return `unsupported-input`;
-  OpenClaw does not convert, resize, or fetch images.
-- One image per evaluation, at most 4 MiB decoded, as the host enforces for tagged
-  image state. TypeSafe's own limits also apply on its side: 280 to 1568 pixels per
-  side, 16 MiB per image, and a 32 MiB request body. Images outside TypeSafe's limits
-  are rejected by the API as `unsupported-input`, not resized.
-- Hosted `jev-latest` and `jev-1.13.0` only. Kev through a loopback `baseUrl`, custom
-  `models.providers.typesafe` endpoints, and custom route IDs return
-  `unsupported-input` for image state.
-
-TypeSafe labels images and Box questions "dreamer-ready": the request format,
-answers, limits, and accuracy can change between releases. The image's pixels leave
-the Gateway host for TypeSafe's hosted API. Text redaction does not cover them, so
-send only images you are allowed to share with TypeSafe. Both the host and this
-adapter must include image support: an older adapter returns `unsupported-input`,
-and a host without tagged image state rejects the batch. Neither judges the caption
-alone.
+This is TypeSafe's experimental image API, not a production accuracy guarantee.
+Its format, limits, and accuracy may change. See the current
+[TypeSafe image documentation](https://docs.typesafe.ai/images) before use.
+Only send images you are authorized to share with the hosted service.
 
 ## Agent evaluation tool
 

@@ -169,28 +169,9 @@ export async function executePreparedDecision(params: {
       ) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
-      const catalogRow = prepared.modelCatalog.entries.find(
+      let row = prepared.modelCatalog.entries.find(
         (entry) => entry.provider === canonical.provider.id && entry.id === modelId,
       );
-      let row = catalogRow;
-      if (!row) {
-        // A configured typed route need not advertise a conversational model.
-        // The selected provider must declare its capabilities; identity alone
-        // grants no support, and any returned transport still goes through routing.
-        const supplemental = await canonical.provider.augmentModelCatalog?.({
-          config: prepared.config,
-          agentDir: prepared.agentDir,
-          workspaceDir: context.workspaceDir,
-          env: process.env,
-          entries: [{ provider: canonical.provider.id, id: modelId, name: modelId }],
-        });
-        if (!assertPrepared()) {
-          return { status: "unavailable", reason: "unsupported-input" };
-        }
-        row = supplemental?.find(
-          (entry) => entry.provider === canonical.provider.id && entry.id === modelId,
-        );
-      }
       if (!row) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
@@ -220,7 +201,7 @@ export async function executePreparedDecision(params: {
           baseUrl: selectedRoute.baseUrl,
           inference: { chat: row.inference?.chat ?? false, ...(decision ? { decision } : {}) },
         };
-      } else if (catalogRow) {
+      } else {
         // Reuse the selected normal provider's existing catalog hook for protocol facts,
         // including explicitly configured custom model IDs. No provider rediscovery or chat Model.
         const supplemental = await canonical.provider.augmentModelCatalog?.({

@@ -11,10 +11,8 @@ export type { Evaluation, EvaluationInput } from "./schema-definition.js";
 
 // Transport/CPU guards; each server enforces its model's context budget.
 export const MAX_JSON_BYTES = 4 * 1024 * 1024;
-// TypeSafe's documented body limit for requests carrying images, including base64 text.
+// The vendor's image request body limit includes base64; ordinary JSON keeps its smaller guard.
 export const MAX_IMAGE_REQUEST_BYTES = 32 * 1024 * 1024;
-
-/** TypeSafe's referenced image map; the adapter builds it only from tagged image state. */
 export type ImageAssets = Readonly<
   Record<
     string,
