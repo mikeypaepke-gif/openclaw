@@ -1,9 +1,12 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { setCapabilityOverrides } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../../test/helpers/temp-dir.js";
 import darkTheme from "./dark.json" with { type: "json" };
 import { loadThemeFromPath } from "./theme.js";
+
+afterEach(() => setCapabilityOverrides({}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -16,10 +19,36 @@ function loadColor(color: string | number, mode: "256color" | "truecolor") {
       colors: { ...darkTheme.colors, accent: color, selectedBg: color },
     }),
   );
-  return loadThemeFromPath(themePath, mode);
+  setCapabilityOverrides({ trueColor: mode === "truecolor" });
+  return loadThemeFromPath(themePath);
 }
 
 describe("loadThemeFromPath", () => {
+  it("preserves missing-color repair guidance", () => {
+    const themePath = join(tempDirs.make("openclaw-theme-"), "missing-color.json");
+    writeFileSync(
+      themePath,
+      JSON.stringify({
+        ...darkTheme,
+        colors: { ...darkTheme.colors, thinkingXhigh: undefined },
+      }),
+    );
+
+    expect(() => loadThemeFromPath(themePath)).toThrow(
+      'Missing required color tokens:\n  - thinkingXhigh\n\nPlease add these colors to your theme\'s "colors" object.',
+    );
+  });
+
+  it("reports invalid numeric palette values at their color path", () => {
+    const themePath = join(tempDirs.make("openclaw-theme-"), "invalid-color.json");
+    writeFileSync(
+      themePath,
+      JSON.stringify({ ...darkTheme, colors: { ...darkTheme.colors, accent: 256 } }),
+    );
+
+    expect(() => loadThemeFromPath(themePath)).toThrow("/colors/accent");
+  });
+
   it.each([
     ["#0000ff", 21],
     ["#2f00ff", 21],

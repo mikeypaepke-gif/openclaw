@@ -1,17 +1,10 @@
-import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
-import type { Server } from "node:net";
-import {
-  decisionBatchV1ToV2,
-  decisionResultV2ToV1,
-  type DecisionBatch,
-  type DecisionProviderContextV2,
-  type DecisionProviderV1,
-  type ProviderDecisionOutcome,
-} from "openclaw/plugin-sdk/decisions";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { vi } from "vitest";
 import plugin from "../index.js";
+import { resolveRuntimeConfig } from "./credentials.js";
+import { legacyWireFixture } from "./prepared.test-support.js";
+import type { EvaluationInput } from "./schema.js";
 
 export function mockFetch(implementation: typeof globalThis.fetch) {
   const fetch = vi.fn(implementation);
@@ -39,12 +32,10 @@ export function stubAmbientProxies() {
 export function collectRequest(request: IncomingMessage, handle: (body: string) => void) {
   const chunks: Buffer[] = [];
   request.on("data", (chunk: Buffer) => chunks.push(chunk));
-  request.on("end", () => {
-    handle(Buffer.concat(chunks).toString("utf8"));
-  });
+  request.on("end", () => handle(Buffer.concat(chunks).toString("utf8")));
 }
 
-export const choiceAnswer = (
+const choiceAnswer = (
   choice: string,
   probabilities: Record<string, number>,
   confidence: number,
@@ -55,11 +46,62 @@ export const scoreAnswer = (
   legend: Record<string, unknown>,
   confidence: number,
 ) => ({ type: "score" as const, score, confidence, probabilities, legend });
-export const closeServer = (server: Server) =>
-  new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
 
+const input = {
+  model: "jev-test",
+  state: { evidence: "synthetic only" },
+  questions: {
+    q: { type: "noul", instructions: { question: "Escalate?" } },
+    c: { type: "choice", criteria: { keep: "Keep", skip: null } },
+    s: { type: "score", criteria: [null, { impact: ["widespread", true, 2] }] },
+  },
+} satisfies EvaluationInput;
+const response = {
+  model: input.model,
+  answers: {
+    q: { type: "noul", noul: 0.37 },
+    c: choiceAnswer("skip", { keep: 0.5, skip: 0.49 }, 0.5),
+    s: scoreAnswer(0.607, { 0: 0.4, 1: 0.6 }, { 0: null, 1: input.questions.s.criteria[1] }, 0.5),
+  },
+  usage: { input_tokens: 12, output_tokens: 3 },
+};
+const localCriteria = ["", '{"impact":["widespread",true,2]}'];
+export const mixedFixture = {
+  input,
+  response,
+  batch: {
+    ...input,
+    questions: { ...input.questions, q: { ...input.questions.q, type: "boolean" as const } },
+  },
+  localInput: {
+    ...input,
+    questions: {
+      ...input.questions,
+      c: { ...input.questions.c, instructions: null },
+      s: { ...input.questions.s, instructions: null, criteria: localCriteria },
+    },
+  },
+  localResponse: {
+    ...response,
+    answers: {
+      ...response.answers,
+      s: { ...response.answers.s, legend: { 0: "", 1: localCriteria[1] } },
+    },
+    latency_ms: 15.7,
+  },
+  result: {
+    status: "ok",
+    result: {
+      model: "jev-test",
+      answers: {
+        q: { type: "boolean", probabilityTrue: 0.37 },
+        c: response.answers.c,
+        s: { type: "score", score: 0.607, confidence: 0.5, probabilities: [0.4, 0.6] },
+      },
+      usage: { inputTokens: 12, outputTokens: 3 },
+    },
+  },
+};
 export function registeredPreparedDecisionProvider(
   current: () => ReturnType<OpenClawPluginApi["runtime"]["config"]["current"]>,
 ) {
@@ -68,55 +110,17 @@ export function registeredPreparedDecisionProvider(
     runtime: { config: { current } },
     registerDecisionProvider,
   } as unknown as OpenClawPluginApi);
-  const provider = registerDecisionProvider.mock.calls[0]?.[0];
-  assert(provider);
-  if (provider.contractVersion !== 2 || provider.provider?.authScope !== "plugin") {
-    throw new Error("TypeSafe fixture registered an unexpected decision contract");
+  const provider = registerDecisionProvider.mock.calls[0]![0];
+  if (provider.contractVersion !== 2) {
+    throw new Error("Expected the prepared TypeSafe provider");
   }
   return provider;
 }
 
-/** Prepared private context, as the host hands it to the selected V2 executor. */
-export const preparedContext = (model: string, budget = 1000) =>
-  ({
-    model: { provider: "typesafe", id: model, name: model },
-    config: {},
-    auth: { mode: "api-key", apiKey: "typesafe-plugin" },
-    signal: new AbortController().signal,
-    deadlineMonotonicMs: performance.now() + budget,
-    isAdmissible: () => true,
-  }) satisfies DecisionProviderContextV2;
-
-/** Drive the registered V2 provider exactly as the host serves a V1 caller. */
 export function registeredDecisionProvider(
   current: () => ReturnType<OpenClawPluginApi["runtime"]["config"]["current"]>,
 ) {
-  const provider = registeredPreparedDecisionProvider(current);
-  return {
-    isReady: () =>
-      provider.provider?.resolveSyntheticAuth?.({ provider: "typesafe" }) !== undefined,
-    async evaluate(
-      batch: DecisionBatch,
-      context: Parameters<DecisionProviderV1["evaluate"]>[1],
-    ): Promise<ProviderDecisionOutcome> {
-      const v2 = decisionBatchV1ToV2(batch);
-      if (!v2) {
-        return { status: "unavailable", reason: "unsupported-input" };
-      }
-      const outcome = await provider.evaluate(v2, {
-        ...preparedContext(context.model),
-        ...(context.agentId ? { agentId: context.agentId } : {}),
-        signal: context.signal,
-        deadlineMonotonicMs: context.deadlineMonotonicMs,
-        isAdmissible: context.isAdmissible ?? (() => true),
-      });
-      if (outcome.status !== "ok") {
-        return outcome;
-      }
-      const result = decisionResultV2ToV1(v2, outcome.result);
-      return result
-        ? { status: "ok", result }
-        : { status: "unavailable", reason: "unsupported-input" };
-    },
-  };
+  return legacyWireFixture(registeredPreparedDecisionProvider(current), () =>
+    resolveRuntimeConfig(current()),
+  );
 }
