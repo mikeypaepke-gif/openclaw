@@ -11,6 +11,7 @@ import type {
   DecisionBatchV2,
   DecisionProviderV1,
   DecisionProviderV2,
+  DecisionProviderContextV2,
   DecisionQuestion,
   ProviderDecisionOutcome,
   ProviderDecisionOutcomeV2,
@@ -40,7 +41,10 @@ type LegacyProvider = DecisionProviderV1 & {
 };
 
 /** Translate the host-selected decision contract through the TypeSafe transport. */
-function createDecisionProvider(getConfig: () => RuntimeConfig): LegacyProvider {
+function createDecisionProvider(
+  getConfig: () => RuntimeConfig,
+  prepared: DecisionProviderContextV2,
+): LegacyProvider {
   return {
     id: "typesafe",
     contractVersion: 1,
@@ -54,7 +58,25 @@ function createDecisionProvider(getConfig: () => RuntimeConfig): LegacyProvider 
       // Sample configuration and the remaining deadline after the cold import settles.
       const { evaluate: evaluateTypeSafe } = await loadClient();
       context.signal.throwIfAborted();
-      const config = getConfig();
+      const original = getConfig();
+      const providerConfig = original.providerConfig
+        ? {
+            ...original.providerConfig,
+            baseUrl: prepared.model.baseUrl ?? original.providerConfig.baseUrl,
+            headers: prepared.model.headers ?? original.providerConfig.headers,
+          }
+        : undefined;
+      const config: RuntimeConfig = {
+        ...original,
+        baseUrl: providerConfig?.baseUrl ?? original.baseUrl,
+        providerConfig,
+        // The readiness marker is not a credential; prepared request auth wins
+        // when supplied, otherwise credentials remain plugin-owned.
+        apiKey:
+          prepared.auth.apiKey === undefined || prepared.auth.apiKey === AUTH_MARKER
+            ? original.apiKey
+            : prepared.auth.apiKey,
+      };
       if (!hasCredentials(config)) {
         return { status: "unavailable", reason: "credentials-unavailable" };
       }
@@ -81,9 +103,9 @@ function createDecisionProvider(getConfig: () => RuntimeConfig): LegacyProvider 
             // DNS and capture admission may await; only the current owner may authorize egress.
             const current = getConfig();
             return (
-              current.baseUrl === config.baseUrl &&
-              current.providerConfig === config.providerConfig &&
-              current.apiKey === config.apiKey &&
+              current.baseUrl === original.baseUrl &&
+              current.providerConfig === original.providerConfig &&
+              current.apiKey === original.apiKey &&
               !current.credentialsUnavailable
             );
           },
@@ -215,7 +237,6 @@ function resultV2(
 
 /** Shared-catalog provider: text keeps the V1 translation; tagged images reach hosted Jev. */
 export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): DecisionProviderV2 {
-  const legacy = createDecisionProvider(getConfig);
   return {
     id: "typesafe",
     contractVersion: 2,
@@ -295,6 +316,7 @@ export function createPreparedDecisionProvider(getConfig: () => RuntimeConfig): 
       if (!request) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
+      const legacy = createDecisionProvider(getConfig, context);
       return resultV2(
         request.batch,
         await legacy.evaluate(request.batch, legacyContext, request.assets),

@@ -242,6 +242,44 @@ describe("text decisions", () => {
   });
 });
 
+describe("prepared transport handoff", () => {
+  it.each(["text", "image"] as const)(
+    "uses prepared endpoint, headers, and auth for %s decisions",
+    async (kind) => {
+      const provider = routed({
+        baseUrl: "https://stale.example.com/v1",
+        apiKey: "stale-config-key",
+        headers: { "X-Route": "stale-config-route" },
+        models: [],
+      });
+      const fetch = mockJsonResponse(response);
+      const context = preparedContext("jev-latest");
+      const outcome = await provider.evaluate(
+        kind === "image"
+          ? image(`data:image/png;base64,${png}`)
+          : { state: { type: "text", text: "synthetic" }, questions },
+        {
+          ...context,
+          model: {
+            ...context.model,
+            baseUrl: "https://api.typesafe.ai/v1",
+            headers: { "X-Route": "prepared-model-route" },
+          },
+          auth: { mode: "api-key", apiKey: "prepared-request-key" },
+        },
+      );
+      expect(outcome).toMatchObject({ status: "ok" });
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(fetch.mock.lastCall?.[0]).toBe("https://api.typesafe.ai/v1/systemone");
+      const { body, headers } = sent(fetch);
+      expect(headers.get("authorization")).toBe("Bearer prepared-request-key");
+      expect(headers.get("x-route")).toBe("prepared-model-route");
+      expect(headers.get(HEADER)).toBe(kind === "image" ? "true" : null);
+      expect(Boolean(body.assets)).toBe(kind === "image");
+    },
+  );
+});
+
 describe("tagged image state", () => {
   it.each([
     ["png", `data:image/png;base64,${png}`, "Doorbell camera, 08:14"],
